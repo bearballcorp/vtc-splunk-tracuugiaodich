@@ -3,6 +3,7 @@ using System.Data;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Serilog;
 using Wpf.Ui;
 using Wpf.Ui.DependencyInjection;
 using Vtc.Splunk.Log.Analyzer.Core;
@@ -23,15 +24,24 @@ public partial class App : Application
         ServiceCollection services = new ServiceCollection();
         ConfigureServices(services);
         ServiceProvider = services.BuildServiceProvider();
+
+        // Ensure logs are flushed when the application exits
+        Exit += (sender, e) => Serilog.Log.CloseAndFlush();
     }
 
     private void ConfigureServices(IServiceCollection services)
     {
+        // Configure Serilog
+        Serilog.Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.File("logs/log-.txt", rollingInterval: RollingInterval.Day)
+            .CreateLogger();
+
         // Add logging
-        services.AddLogging(configure =>
+        services.AddLogging(builder =>
         {
-            configure.AddConsole();
-            configure.SetMinimumLevel(LogLevel.Debug); // Set minimum log level
+            builder.ClearProviders();
+            builder.AddSerilog();
         });
 
         // Add WPF-UI services

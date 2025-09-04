@@ -33,7 +33,7 @@
             ShowMinimize="True"
             ShowMaximize="True"
             ShowClose="True"
-            Style="{StaticResource UiTitleBar}" />
+            />
 
         <ui:NavigationView
             Grid.Row="1"
@@ -46,14 +46,13 @@
             MenuItemsSource="{Binding ViewModel.NavigationViewItems, Mode=OneWay}"
             PaneDisplayMode="Left"
             PaneFooter="{Binding ViewModel.NavigationViewFooter, Mode=OneWay}"
-            PaneHeader="{Binding ViewModel.NavigationViewHeader, Mode=OneWay}"
-            Style="{StaticResource UiNavigationView}">
+            >
             <ui:NavigationView.ContentOverlay>
                 <Grid />
             </ui:NavigationView.ContentOverlay>
             <ui:NavigationView.Header>
                 <StackPanel Orientation="Horizontal" Margin="12,0,0,0">
-                    <Image Source="/Assets/applicationIcon.png" Width="24" Height="24" VerticalAlignment="Center" />
+                    <!-- <Image Source="/Assets/applicationIcon.png" Width="24" Height="24" VerticalAlignment="Center" /> -->
                     <TextBlock Text="{Binding ViewModel.ApplicationTitle, Mode=OneWay}" VerticalAlignment="Center" Margin="8,0,0,0" FontSize="16" FontWeight="SemiBold" />
                 </StackPanel>
             </ui:NavigationView.Header>

@@ -2,11 +2,14 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System;
 using System.Collections.Generic; // Add this
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.IO; // Add this
 using System.Linq; // Add this
 using System.Threading.Tasks;
+using System.Windows;
 using Microsoft.Win32; // For OpenFileDialog and SaveFileDialog
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq; // Add this
 using Vtc.Splunk.Log.Analyzer.Core;
 using Vtc.Splunk.Log.Analyzer.Models;
@@ -19,6 +22,7 @@ public partial class DashboardViewModel : ObservableObject
     private readonly DataExtractionService _dataExtractionService;
     private readonly FileImportService _fileImportService;
     private readonly FileExportService _fileExportService;
+    private readonly ILogger<DashboardViewModel> _logger;
 
     [ObservableProperty]
     private string _pageTitle = "Dashboard";
@@ -49,12 +53,14 @@ public partial class DashboardViewModel : ObservableObject
         SplunkService splunkService,
         DataExtractionService dataExtractionService,
         FileImportService fileImportService,
-        FileExportService fileExportService)
+        FileExportService fileExportService,
+        ILogger<DashboardViewModel> logger)
     {
         _splunkService = splunkService;
         _dataExtractionService = dataExtractionService;
         _fileImportService = fileImportService;
         _fileExportService = fileExportService;
+        _logger = logger;
 
         ImportCodesCommand = new RelayCommand(ImportCodes);
         SearchCommand = new AsyncRelayCommand(Search);
@@ -77,12 +83,15 @@ public partial class DashboardViewModel : ObservableObject
                 {
                     CodesToSearch.Add(code);
                 }
-                SearchProgress = $"Imported {CodesToSearch.Count} codes from {Path.GetFileName(openFileDialog.FileName)}.";
+                var message = $"Imported {CodesToSearch.Count} codes from {Path.GetFileName(openFileDialog.FileName)}.";
+                SearchProgress = message;
+                _logger.LogInformation(message);
             }
             catch (Exception ex)
             {
                 SearchProgress = $"Error importing codes: {ex.Message}";
-                // Log the exception
+                _logger.LogError(ex, "An error occurred while importing codes from {FilePath}", openFileDialog.FileName);
+                MessageBox.Show($"An error occurred while importing codes: {ex.Message}", "Import Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
     }
@@ -92,20 +101,20 @@ public partial class DashboardViewModel : ObservableObject
         IsSearching = true;
         SearchResults.Clear();
         SearchProgress = "Starting search...";
+        var searchResultsBag = new ConcurrentBag<TransactionInfo>();
+        var processedCount = 0;
 
         try
         {
-            for (int i = 0; i < CodesToSearch.Count; i++)
+            await Parallel.ForEachAsync(CodesToSearch, async (code, cancellationToken) =>
             {
-                var code = CodesToSearch[i];
-                SearchProgress = $"Searching for code {i + 1}/{CodesToSearch.Count}: {code}";
-
                 try
                 {
                     var splunkResults = await _splunkService.SearchLogs(code, StartDate, EndDate);
 
                     if (splunkResults != null && splunkResults.Any())
                     {
+                        var found = false;
                         foreach (JToken logEntryToken in splunkResults)
                         {
                             if (logEntryToken is JObject logEntry)
@@ -115,31 +124,49 @@ public partial class DashboardViewModel : ObservableObject
                                 {
                                     transactionInfo.SearchCode = code;
                                     transactionInfo.SearchStatus = "Success";
-                                    SearchResults.Add(transactionInfo);
-                                    break; // Assuming we only need the first transactionEntityAttribute
+                                    searchResultsBag.Add(transactionInfo);
+                                    found = true;
+                                    break;
                                 }
                             }
                         }
-                        // The 'logEntry' variable is now scoped within the 'if' block above.
-                        // This block is a duplicate and should be removed.
+                        if (!found)
+                        {
+                            searchResultsBag.Add(new TransactionInfo { SearchCode = code, SearchStatus = "No Data" });
+                        }
                     }
                     else
                     {
-                        SearchResults.Add(new TransactionInfo { SearchCode = code, SearchStatus = "No Data" });
+                        searchResultsBag.Add(new TransactionInfo { SearchCode = code, SearchStatus = "No Data" });
                     }
                 }
                 catch (Exception ex)
                 {
-                    SearchResults.Add(new TransactionInfo { SearchCode = code, SearchStatus = $"Failed: {ex.Message}" });
-                    // Log the exception
+                    var errorMessage = $"Failed to search for code {code}: {ex.Message}";
+                    searchResultsBag.Add(new TransactionInfo { SearchCode = code, SearchStatus = errorMessage });
+                    _logger.LogError(ex, "An error occurred while searching for code {SearchCode}", code);
                 }
+                finally
+                {
+                    Interlocked.Increment(ref processedCount);
+                    SearchProgress = $"Searching... Processed {processedCount}/{CodesToSearch.Count} codes.";
+                }
+            });
+
+            SearchResults.Clear();
+            foreach (var item in searchResultsBag.OrderBy(r => r.SearchCode))
+            {
+                SearchResults.Add(item);
             }
+
             SearchProgress = "Search complete.";
+            _logger.LogInformation("Search operation completed successfully.");
         }
         catch (Exception ex)
         {
             SearchProgress = $"An error occurred during search: {ex.Message}";
-            // Log the exception
+            _logger.LogError(ex, "An unexpected error occurred during the search operation.");
+            MessageBox.Show($"An error occurred during the search operation: {ex.Message}", "Search Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
@@ -165,12 +192,15 @@ public partial class DashboardViewModel : ObservableObject
                 {
                     _fileExportService.ExportToExcel(SearchResults.ToList(), saveFileDialog.FileName);
                 }
-                SearchProgress = $"Results exported to {Path.GetFileName(saveFileDialog.FileName)}.";
+                var message = $"Results exported to {Path.GetFileName(saveFileDialog.FileName)}.";
+                SearchProgress = message;
+                _logger.LogInformation(message);
             }
             catch (Exception ex)
             {
                 SearchProgress = $"Error exporting results: {ex.Message}";
-                // Log the exception
+                _logger.LogError(ex, "An error occurred while exporting results to {FilePath}", saveFileDialog.FileName);
+                MessageBox.Show($"An error occurred while exporting results: {ex.Message}", "Export Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
     }
