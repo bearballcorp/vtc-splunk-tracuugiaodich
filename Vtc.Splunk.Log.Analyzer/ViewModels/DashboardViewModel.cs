@@ -106,52 +106,31 @@ public partial class DashboardViewModel : ObservableObject
 
         try
         {
-            await Parallel.ForEachAsync(CodesToSearch, async (code, cancellationToken) =>
-            {
-                try
-                {
-                    var splunkResults = await _splunkService.SearchLogs(code, StartDate, EndDate);
+            var splunkResults = await _splunkService.SearchLogs(CodesToSearch, StartDate, EndDate);
 
-                    if (splunkResults != null && splunkResults.Any())
+            if (splunkResults != null && splunkResults.Any())
+            {
+                foreach (JToken logEntryToken in splunkResults)
+                {
+                    if (logEntryToken is JObject logEntry)
                     {
-                        var found = false;
-                        foreach (JToken logEntryToken in splunkResults)
+                        var transactionInfo = _dataExtractionService.ExtractTransactionInfo(logEntry);
+                        if (transactionInfo != null)
                         {
-                            if (logEntryToken is JObject logEntry)
-                            {
-                                var transactionInfo = _dataExtractionService.ExtractTransactionInfo(logEntry);
-                                if (transactionInfo != null)
-                                {
-                                    transactionInfo.SearchCode = code;
-                                    transactionInfo.SearchStatus = "Success";
-                                    searchResultsBag.Add(transactionInfo);
-                                    found = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (!found)
-                        {
-                            searchResultsBag.Add(new TransactionInfo { SearchCode = code, SearchStatus = "No Data" });
+                            searchResultsBag.Add(transactionInfo);
                         }
                     }
-                    else
-                    {
-                        searchResultsBag.Add(new TransactionInfo { SearchCode = code, SearchStatus = "No Data" });
-                    }
                 }
-                catch (Exception ex)
+            }
+
+            var foundCodes = new HashSet<string>(searchResultsBag.Select(r => r.SearchCode));
+            foreach (var code in CodesToSearch)
+            {
+                if (!foundCodes.Contains(code))
                 {
-                    var errorMessage = $"Failed to search for code {code}: {ex.Message}";
-                    searchResultsBag.Add(new TransactionInfo { SearchCode = code, SearchStatus = errorMessage });
-                    _logger.LogError(ex, "An error occurred while searching for code {SearchCode}", code);
+                    searchResultsBag.Add(new TransactionInfo { SearchCode = code, SearchStatus = "No Data" });
                 }
-                finally
-                {
-                    Interlocked.Increment(ref processedCount);
-                    SearchProgress = $"Searching... Processed {processedCount}/{CodesToSearch.Count} codes.";
-                }
-            });
+            }
 
             SearchResults.Clear();
             foreach (var item in searchResultsBag.OrderBy(r => r.SearchCode))
@@ -159,7 +138,7 @@ public partial class DashboardViewModel : ObservableObject
                 SearchResults.Add(item);
             }
 
-            SearchProgress = "Search complete.";
+            SearchProgress = $"Search complete. Found {searchResultsBag.Count} results for {CodesToSearch.Count} codes.";
             _logger.LogInformation("Search operation completed successfully.");
         }
         catch (Exception ex)
