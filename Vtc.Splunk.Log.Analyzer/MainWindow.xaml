@@ -1,0 +1,66 @@
+﻿<ui:FluentWindow
+    x:Class="Vtc.Splunk.Log.Analyzer.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="clr-namespace:Vtc.Splunk.Log.Analyzer"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+    Title="{Binding ViewModel.ApplicationTitle, Mode=OneWay}"
+    Width="1100"
+    Height="650"
+    d:DataContext="{d:DesignInstance local:MainWindow, IsDesignTimeCreatable=True}"
+    ExtendsContentIntoTitleBar="True"
+    WindowStartupLocation="CenterScreen"
+    mc:Ignorable="d">
+    <ui:FluentWindow.Resources>
+        <Style TargetType="ScrollViewer">
+            <Setter Property="Focusable" Value="False" />
+        </Style>
+    </ui:FluentWindow.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar
+            Grid.Row="0"
+            Title="{Binding ViewModel.ApplicationTitle, Mode=OneWay}"
+            x:Name="UiTitleBar"
+            ForceShutdown="False"
+            ShowMinimize="True"
+            ShowMaximize="True"
+            ShowClose="True"
+            Style="{StaticResource UiTitleBar}" />
+
+        <ui:NavigationView
+            Grid.Row="1"
+            x:Name="NavigationView"
+            Margin="0, -40, 0, 0"
+            FrameMargin="0"
+            HeaderVisibility="Collapsed"
+            IsBackButtonVisible="Visible"
+            IsPaneToggleVisible="True"
+            MenuItemsSource="{Binding ViewModel.NavigationViewItems, Mode=OneWay}"
+            PaneDisplayMode="Left"
+            PaneFooter="{Binding ViewModel.NavigationViewFooter, Mode=OneWay}"
+            PaneHeader="{Binding ViewModel.NavigationViewHeader, Mode=OneWay}"
+            Style="{StaticResource UiNavigationView}">
+            <ui:NavigationView.ContentOverlay>
+                <Grid />
+            </ui:NavigationView.ContentOverlay>
+            <ui:NavigationView.Header>
+                <StackPanel Orientation="Horizontal" Margin="12,0,0,0">
+                    <Image Source="/Assets/applicationIcon.png" Width="24" Height="24" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding ViewModel.ApplicationTitle, Mode=OneWay}" VerticalAlignment="Center" Margin="8,0,0,0" FontSize="16" FontWeight="SemiBold" />
+                </StackPanel>
+            </ui:NavigationView.Header>
+        </ui:NavigationView>
+
+        <Grid Grid.Row="1">
+            <Frame x:Name="RootFrame" Margin="0" />
+        </Grid>
+    </Grid>
+</ui:FluentWindow>
