@@ -38,6 +38,10 @@ namespace SplunkLogAnalyzer
             btnImport.Click += BtnImport_Click;
             btnSearch.Click += BtnSearch_Click;
             exportButton.Click += ExportButton_Click;
+
+            // Configure DataGridView
+            dgvCodeList.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            dgvCodeList.MultiSelect = true;
         }
 
         private void SearchWorker_RunWorkerCompleted(object? sender, RunWorkerCompletedEventArgs e)
@@ -57,6 +61,9 @@ namespace SplunkLogAnalyzer
 
             // Re-enable UI controls
             btnSearch.Enabled = true;
+            btnAdd.Enabled = true;
+            btnRemove.Enabled = true;
+            btnImport.Enabled = true;
             progressBar.Value = 0;
         }
 
@@ -154,6 +161,9 @@ namespace SplunkLogAnalyzer
                 _codeList.ResetBindings();
 
                 btnSearch.Enabled = false;
+                btnAdd.Enabled = false;
+                btnRemove.Enabled = false;
+                btnImport.Enabled = false;
                 _searchWorker.RunWorkerAsync(_codeList);
             }
         }
