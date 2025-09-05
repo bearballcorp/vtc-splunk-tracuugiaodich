@@ -12,6 +12,9 @@ namespace SplunkLogAnalyzer.Services
 {
     public class SplunkService
     {
+        private static readonly System.Text.RegularExpressions.Regex _jsonRegex = new System.Text.RegularExpressions.Regex(@"\{.*?\}", System.Text.RegularExpressions.RegexOptions.Singleline);
+        private static readonly System.Text.RegularExpressions.Regex _normalizeRegex = new System.Text.RegularExpressions.Regex(@"(\d+)");
+
         public SplunkService()
         {
             // HttpClient will be created per request to avoid the "already started" error
@@ -75,8 +78,8 @@ namespace SplunkLogAnalyzer.Services
                 dynamic? item = JsonConvert.DeserializeObject<dynamic>(jsonObject);
                 if (item != null && item.result != null && item.result._raw != null)
                 {
-                    string rawLog = item.result._raw;
-                    if (rawLog.Contains("transactionEntityAttribute"))
+                    string? rawLog = item.result._raw?.ToString();
+                    if (!string.IsNullOrEmpty(rawLog) && rawLog.Contains("transactionEntityAttribute"))
                     {
                         // Parse the entire raw log as JSON and extract transactions from the array
                         try
@@ -99,43 +102,29 @@ namespace SplunkLogAnalyzer.Services
                                 
                                 var logData = Newtonsoft.Json.Linq.JObject.Parse(jsonPart);
 
-                                // Navigate to transactions array
-                                var transactions = logData["requestParameters"]?["request"]?["requestParams"]?["transactions"] as Newtonsoft.Json.Linq.JArray;
-
-                                if (transactions != null)
+                            var transactions = ExtractTransactionsFromJson(jsonPart);
+                            foreach (var transactionEntityAttribute in transactions)
+                            {
+                                var partnerCode = transactionEntityAttribute["partnerCustomerCode"]?.ToString();
+                                if (!string.IsNullOrEmpty(partnerCode) && MatchesCode(partnerCode, code))
                                 {
-                                    Console.WriteLine($"Found {transactions.Count} transactions in array");
-
-                                    foreach (var transaction in transactions)
+                                    return new SearchResult
                                     {
-                                        var transactionEntityAttribute = transaction["transactionEntityAttribute"];
-                                        if (transactionEntityAttribute != null)
-                                        {
-                                            var partnerCode = transactionEntityAttribute["partnerCustomerCode"]?.ToString();
-                                            if (!string.IsNullOrEmpty(partnerCode) && MatchesCode(partnerCode, code))
-                                            {
-                                                return new SearchResult
-                                                {
-                                                    SearchCode = code,
-                                                    IssuerBankName = transactionEntityAttribute["issuerBankName"]?.ToString() ?? "",
-                                                    RemitterName = transactionEntityAttribute["remitterName"]?.ToString() ?? "",
-                                                    RemitterAccountNumber = transactionEntityAttribute["remitterAccountNumber"]?.ToString() ?? "",
-                                                    Status = SearchStatus.Success,
-                                                    Timestamp = DateTime.Now
-                                                };
-                                            }
-                                        }
-                                    }
+                                        SearchCode = code,
+                                        IssuerBankName = transactionEntityAttribute["issuerBankName"]?.ToString() ?? "",
+                                        RemitterName = transactionEntityAttribute["remitterName"]?.ToString() ?? "",
+                                        RemitterAccountNumber = transactionEntityAttribute["remitterAccountNumber"]?.ToString() ?? "",
+                                        Status = SearchStatus.Success,
+                                        Timestamp = DateTime.Now
+                                    };
                                 }
                             }
+                            }
                         }
-                        catch (Exception ex)
+                        catch (Exception)
                         {
-                            Console.WriteLine($"Error parsing JSON: {ex.Message}");
                             // Fallback to old method if JSON parsing fails
                             var transactions = ExtractAllTransactionJsons(rawLog);
-                            Console.WriteLine($"Fallback: Found {transactions.Count} transactions");
-
                             foreach (var transactionJson in transactions)
                             {
                                 dynamic? transactionData = JsonConvert.DeserializeObject<dynamic>(transactionJson);
@@ -212,11 +201,34 @@ namespace SplunkLogAnalyzer.Services
             return normalizedPartner.Contains(normalizedSearch) || normalizedSearch.Contains(normalizedPartner);
         }
 
+        private List<Newtonsoft.Json.Linq.JToken> ExtractTransactionsFromJson(string jsonPart)
+        {
+            var logData = Newtonsoft.Json.Linq.JObject.Parse(jsonPart);
+            var transactions = new List<Newtonsoft.Json.Linq.JToken>();
+
+            // Navigate to transactions array
+            var transactionArray = logData["requestParameters"]?["request"]?["requestParams"]?["transactions"] as Newtonsoft.Json.Linq.JArray;
+
+            if (transactionArray != null)
+            {
+                foreach (var transaction in transactionArray)
+                {
+                    var transactionEntityAttribute = transaction["transactionEntityAttribute"];
+                    if (transactionEntityAttribute != null)
+                    {
+                        transactions.Add(transactionEntityAttribute);
+                    }
+                }
+            }
+
+            return transactions;
+        }
+
         private string NormalizeCode(string code)
         {
             // Remove leading zeros from numeric parts
             // Example: VTCMS0079194023 -> VTCMS79194023
-            var parts = System.Text.RegularExpressions.Regex.Split(code, @"(\d+)");
+            var parts = _normalizeRegex.Split(code);
             for (int i = 0; i < parts.Length; i++)
             {
                 if (int.TryParse(parts[i], out _))
