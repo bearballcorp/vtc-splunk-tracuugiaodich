@@ -42,12 +42,20 @@ namespace SplunkLogAnalyzer
                 using (var handler = new HttpClientHandler { ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true })
                 using (var client = new HttpClient(handler))
                 {
-                    var uri = new Uri(new Uri(txtServerUrl.Text), "/services/auth/login");
+                    var baseUrl = txtServerUrl.Text.Replace("http://", "https://");
+                    var uri = new Uri(new Uri(baseUrl), "/services/auth/login");
                     var authToken = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"{txtUsername.Text}:{txtPassword.Text}"));
                     client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authToken);
 
-                    // We just need to check if we can get a response, no need to process it here.
-                    var response = await client.GetAsync(uri);
+                    // Use POST with form data as per Splunk docs
+                    var requestData = new System.Collections.Generic.Dictionary<string, string>
+                    {
+                        { "username", txtUsername.Text },
+                        { "password", txtPassword.Text }
+                    };
+                    var content = new System.Net.Http.FormUrlEncodedContent(requestData);
+
+                    var response = await client.PostAsync(uri, content);
 
                     if (response.IsSuccessStatusCode)
                     {

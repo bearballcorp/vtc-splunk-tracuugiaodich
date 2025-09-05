@@ -65,7 +65,14 @@ namespace SplunkLogAnalyzer
             progressBar.Value = e.ProgressPercentage;
             if (e.UserState is SearchResult result)
             {
-                _resultsList.Add(result);
+                if (InvokeRequired)
+                {
+                    Invoke((MethodInvoker)(() => _resultsList.Add(result)));
+                }
+                else
+                {
+                    _resultsList.Add(result);
+                }
                 var codeItem = _codeList.FirstOrDefault(c => c.Code == result.SearchCode);
                 if (codeItem != null)
                 {

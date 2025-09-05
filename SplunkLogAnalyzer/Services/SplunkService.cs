@@ -12,21 +12,12 @@ namespace SplunkLogAnalyzer.Services
 {
     public class SplunkService
     {
-        private readonly HttpClient _httpClient;
-
         public SplunkService()
         {
-            // It's better to use IHttpClientFactory in a real-world app, but for simplicity, we'll create it here.
-            // We also ignore SSL certificate validation for development purposes. This should be configured properly in production.
-            var handler = new HttpClientHandler
-            {
-                ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
-            };
-            _httpClient = new HttpClient(handler);
-            ConfigureHttpClient();
+            // HttpClient will be created per request to avoid the "already started" error
         }
 
-        private void ConfigureHttpClient()
+        private void ConfigureHttpClient(HttpClient httpClient)
         {
             var settings = Settings.Default;
             if (string.IsNullOrWhiteSpace(settings.SplunkServerUrl))
@@ -34,19 +25,26 @@ namespace SplunkLogAnalyzer.Services
                 throw new InvalidOperationException("Splunk server URL is not configured.");
             }
 
-            _httpClient.BaseAddress = new Uri(settings.SplunkServerUrl);
-            _httpClient.DefaultRequestHeaders.Accept.Clear();
-            _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            // Thay đổi thành HTTPS
+            var baseUrl = settings.SplunkServerUrl.Replace("http://", "https://");
+            httpClient.BaseAddress = new Uri(baseUrl);
+            httpClient.DefaultRequestHeaders.Accept.Clear();
+            httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{settings.SplunkUsername}:{settings.SplunkPassword}"));
-            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
-            _httpClient.Timeout = TimeSpan.FromSeconds(settings.ApiTimeout);
+            httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+            httpClient.Timeout = TimeSpan.FromSeconds(settings.ApiTimeout);
         }
 
         public async Task<SearchResult> SearchLogsAsync(string code, DateTime startTime, DateTime endTime)
         {
-            // Re-configure client in case settings have changed
-            ConfigureHttpClient();
+            // Create a new HttpClient instance for each request to avoid the "already started" error
+            var handler = new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
+            };
+            using var httpClient = new HttpClient(handler);
+            ConfigureHttpClient(httpClient);
 
             var searchQuery = $"search {code} source=\"bankgatev2-public\"";
             var requestData = new Dictionary<string, string>
@@ -58,7 +56,8 @@ namespace SplunkLogAnalyzer.Services
             };
 
             var content = new FormUrlEncodedContent(requestData);
-            var response = await _httpClient.PostAsync("/services/search/jobs/export", content);
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/x-www-form-urlencoded");
+            var response = await httpClient.PostAsync("/services/search/jobs/export", content);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -79,28 +78,81 @@ namespace SplunkLogAnalyzer.Services
                     string rawLog = item.result._raw;
                     if (rawLog.Contains("transactionEntityAttribute"))
                     {
-                        // This is a simplified extraction. A more robust solution would parse the JSON properly.
+                        // Parse the entire raw log as JSON and extract transactions from the array
                         try
                         {
-                            var transactionJson = ExtractTransactionJson(rawLog);
-                            dynamic? transactionData = JsonConvert.DeserializeObject<dynamic>(transactionJson);
-
-                            if (transactionData != null)
+                            // Find the JSON part (skip timestamp and other prefix)
+                            var jsonStart = rawLog.IndexOf("{");
+                            if (jsonStart != -1)
                             {
-                                return new SearchResult
+                                var jsonPart = rawLog.Substring(jsonStart);
+                                
+                                // Find the end of JSON (before any additional text like "signature:")
+                                var jsonEnd = jsonPart.LastIndexOf("}");
+                                if (jsonEnd != -1)
                                 {
-                                    SearchCode = code,
-                                    IssuerBankName = transactionData.issuerBankName,
-                                    RemitterName = transactionData.remitterName,
-                                    RemitterAccountNumber = transactionData.remitterAccountNumber,
-                                    Status = SearchStatus.Success,
-                                    Timestamp = DateTime.Now
-                                };
+                                    jsonPart = jsonPart.Substring(0, jsonEnd + 1);
+                                }
+                                
+                                // Unescape JSON if needed
+                                jsonPart = System.Text.RegularExpressions.Regex.Unescape(jsonPart);
+                                
+                                var logData = Newtonsoft.Json.Linq.JObject.Parse(jsonPart);
+
+                                // Navigate to transactions array
+                                var transactions = logData["requestParameters"]?["request"]?["requestParams"]?["transactions"] as Newtonsoft.Json.Linq.JArray;
+
+                                if (transactions != null)
+                                {
+                                    Console.WriteLine($"Found {transactions.Count} transactions in array");
+
+                                    foreach (var transaction in transactions)
+                                    {
+                                        var transactionEntityAttribute = transaction["transactionEntityAttribute"];
+                                        if (transactionEntityAttribute != null)
+                                        {
+                                            var partnerCode = transactionEntityAttribute["partnerCustomerCode"]?.ToString();
+                                            if (!string.IsNullOrEmpty(partnerCode) && MatchesCode(partnerCode, code))
+                                            {
+                                                return new SearchResult
+                                                {
+                                                    SearchCode = code,
+                                                    IssuerBankName = transactionEntityAttribute["issuerBankName"]?.ToString() ?? "",
+                                                    RemitterName = transactionEntityAttribute["remitterName"]?.ToString() ?? "",
+                                                    RemitterAccountNumber = transactionEntityAttribute["remitterAccountNumber"]?.ToString() ?? "",
+                                                    Status = SearchStatus.Success,
+                                                    Timestamp = DateTime.Now
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
-                        catch
+                        catch (Exception ex)
                         {
-                            // Ignore parsing errors and continue to the next log entry
+                            Console.WriteLine($"Error parsing JSON: {ex.Message}");
+                            // Fallback to old method if JSON parsing fails
+                            var transactions = ExtractAllTransactionJsons(rawLog);
+                            Console.WriteLine($"Fallback: Found {transactions.Count} transactions");
+
+                            foreach (var transactionJson in transactions)
+                            {
+                                dynamic? transactionData = JsonConvert.DeserializeObject<dynamic>(transactionJson);
+                                var partnerCode = transactionData?.partnerCustomerCode?.ToString();
+                                if (!string.IsNullOrEmpty(partnerCode) && MatchesCode(partnerCode, code))
+                                {
+                                    return new SearchResult
+                                    {
+                                        SearchCode = code,
+                                        IssuerBankName = transactionData?.issuerBankName?.ToString() ?? "",
+                                        RemitterName = transactionData?.remitterName?.ToString() ?? "",
+                                        RemitterAccountNumber = transactionData?.remitterAccountNumber?.ToString() ?? "",
+                                        Status = SearchStatus.Success,
+                                        Timestamp = DateTime.Now
+                                    };
+                                }
+                            }
                         }
                     }
                 }
@@ -109,36 +161,71 @@ namespace SplunkLogAnalyzer.Services
             return new SearchResult { SearchCode = code, Status = SearchStatus.NoData, Timestamp = DateTime.Now };
         }
 
-        private string ExtractTransactionJson(string rawLog)
+        private List<string> ExtractAllTransactionJsons(string rawLog)
         {
+            var transactions = new List<string>();
             const string startMarker = "\"transactionEntityAttribute\":";
-            var startIndex = rawLog.IndexOf(startMarker);
-            if (startIndex == -1) return string.Empty;
+            var startIndex = 0;
 
-            startIndex += startMarker.Length;
-            var jsonSubstring = rawLog.Substring(startIndex).Trim();
-            
-            // Find the matching closing brace for the JSON object
-            int braceCount = 0;
-            int endIndex = -1;
-            for (int i = 0; i < jsonSubstring.Length; i++)
+            while ((startIndex = rawLog.IndexOf(startMarker, startIndex)) != -1)
             {
-                if (jsonSubstring[i] == '{') braceCount++;
-                else if (jsonSubstring[i] == '}') braceCount--;
+                startIndex += startMarker.Length;
+                var jsonSubstring = rawLog.Substring(startIndex).Trim();
 
-                if (braceCount == 0)
+                // Find the matching closing brace for the JSON object
+                int braceCount = 0;
+                int endIndex = -1;
+                for (int i = 0; i < jsonSubstring.Length; i++)
                 {
-                    endIndex = i;
-                    break;
+                    if (jsonSubstring[i] == '{') braceCount++;
+                    else if (jsonSubstring[i] == '}') braceCount--;
+
+                    if (braceCount == 0)
+                    {
+                        endIndex = i;
+                        break;
+                    }
+                }
+
+                if (endIndex != -1)
+                {
+                    var transactionJson = jsonSubstring.Substring(0, endIndex + 1);
+                    transactions.Add(transactionJson);
+                }
+
+                // Move past this transaction to find the next one
+                startIndex += jsonSubstring.Length;
+            }
+
+            return transactions;
+        }
+
+        private bool MatchesCode(string partnerCode, string searchCode)
+        {
+            // Direct contains
+            if (partnerCode.Contains(searchCode)) return true;
+
+            // Normalize by removing leading zeros in numeric parts
+            var normalizedPartner = NormalizeCode(partnerCode);
+            var normalizedSearch = NormalizeCode(searchCode);
+
+            return normalizedPartner.Contains(normalizedSearch) || normalizedSearch.Contains(normalizedPartner);
+        }
+
+        private string NormalizeCode(string code)
+        {
+            // Remove leading zeros from numeric parts
+            // Example: VTCMS0079194023 -> VTCMS79194023
+            var parts = System.Text.RegularExpressions.Regex.Split(code, @"(\d+)");
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (int.TryParse(parts[i], out _))
+                {
+                    parts[i] = parts[i].TrimStart('0');
+                    if (string.IsNullOrEmpty(parts[i])) parts[i] = "0";
                 }
             }
-
-            if (endIndex != -1)
-            {
-                return jsonSubstring.Substring(0, endIndex + 1);
-            }
-
-            return string.Empty;
+            return string.Join("", parts);
         }
     }
 }
