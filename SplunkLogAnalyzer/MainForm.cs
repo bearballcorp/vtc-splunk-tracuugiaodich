@@ -14,6 +14,7 @@ namespace SplunkLogAnalyzer
         private readonly BindingList<CodeItem> _codeList = new BindingList<CodeItem>();
         private readonly BindingList<SearchResult> _resultsList = new BindingList<SearchResult>();
         private readonly BackgroundWorker _searchWorker = new BackgroundWorker();
+        private Button btnSearchSelected;
 
         public MainForm()
         {
@@ -42,6 +43,18 @@ namespace SplunkLogAnalyzer
             // Configure DataGridView
             dgvCodeList.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
             dgvCodeList.MultiSelect = true;
+            dgvCodeList.ClearSelection();
+
+            // Add Search Selected button
+            btnSearchSelected = new Button();
+            btnSearchSelected.Location = new Point(387, 20);
+            btnSearchSelected.Name = "btnSearchSelected";
+            btnSearchSelected.Size = new Size(100, 27);
+            btnSearchSelected.TabIndex = 3;
+            btnSearchSelected.Text = "Search Selected";
+            btnSearchSelected.UseVisualStyleBackColor = true;
+            groupBox1.Controls.Add(btnSearchSelected);
+            btnSearchSelected.Click += BtnSearchSelected_Click;
         }
 
         private void SearchWorker_RunWorkerCompleted(object? sender, RunWorkerCompletedEventArgs e)
@@ -61,6 +74,7 @@ namespace SplunkLogAnalyzer
 
             // Re-enable UI controls
             btnSearch.Enabled = true;
+            btnSearchSelected.Enabled = true;
             btnAdd.Enabled = true;
             btnRemove.Enabled = true;
             btnImport.Enabled = true;
@@ -72,13 +86,28 @@ namespace SplunkLogAnalyzer
             progressBar.Value = e.ProgressPercentage;
             if (e.UserState is SearchResult result)
             {
-                if (InvokeRequired)
+                var existingResult = _resultsList.FirstOrDefault(r => r.SearchCode == result.SearchCode);
+                if (existingResult != null)
                 {
-                    Invoke((MethodInvoker)(() => _resultsList.Add(result)));
+                    // Update existing result
+                    existingResult.IssuerBankName = result.IssuerBankName;
+                    existingResult.RemitterName = result.RemitterName;
+                    existingResult.RemitterAccountNumber = result.RemitterAccountNumber;
+                    existingResult.Status = result.Status;
+                    existingResult.Timestamp = result.Timestamp;
+                    _resultsList.ResetItem(_resultsList.IndexOf(existingResult));
                 }
                 else
                 {
-                    _resultsList.Add(result);
+                    // Add new result
+                    if (InvokeRequired)
+                    {
+                        Invoke((MethodInvoker)(() => _resultsList.Add(result)));
+                    }
+                    else
+                    {
+                        _resultsList.Add(result);
+                    }
                 }
                 var codeItem = _codeList.FirstOrDefault(c => c.Code == result.SearchCode);
                 if (codeItem != null)
@@ -94,7 +123,7 @@ namespace SplunkLogAnalyzer
             var worker = sender as BackgroundWorker;
             if (worker == null) return;
 
-            var codesToSearch = (BindingList<CodeItem>)e.Argument;
+            var codesToSearch = (List<CodeItem>)e.Argument;
             int totalCodes = codesToSearch.Count;
             int processedCount = 0;
 
@@ -132,6 +161,49 @@ namespace SplunkLogAnalyzer
             }
         }
 
+        private void BtnSearchSelected_Click(object? sender, EventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(Properties.Settings.Default.SplunkServerUrl))
+            {
+                MessageBox.Show("Splunk server URL is not configured. Please configure it in the Settings menu.", "Configuration Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            // Get selected codes
+            var selectedCodes = dgvCodeList.SelectedRows
+                .Cast<DataGridViewRow>()
+                .Select(row => row.DataBoundItem as CodeItem)
+                .Where(item => item != null)
+                .ToList();
+
+            if (selectedCodes.Count == 0)
+            {
+                MessageBox.Show("Please select at least one code to search.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            if (_searchWorker.IsBusy)
+            {
+                _searchWorker.CancelAsync();
+            }
+            else
+            {
+                // Reset status for selected codes
+                foreach (var item in selectedCodes)
+                {
+                    item.Status = "Pending";
+                }
+                _codeList.ResetBindings();
+
+                btnSearch.Enabled = false;
+                btnSearchSelected.Enabled = false;
+                btnAdd.Enabled = false;
+                btnRemove.Enabled = false;
+                btnImport.Enabled = false;
+                _searchWorker.RunWorkerAsync(selectedCodes);
+            }
+        }
+
         private void BtnSearch_Click(object? sender, EventArgs e)
         {
             if (string.IsNullOrWhiteSpace(Properties.Settings.Default.SplunkServerUrl))
@@ -161,10 +233,11 @@ namespace SplunkLogAnalyzer
                 _codeList.ResetBindings();
 
                 btnSearch.Enabled = false;
+                btnSearchSelected.Enabled = false;
                 btnAdd.Enabled = false;
                 btnRemove.Enabled = false;
                 btnImport.Enabled = false;
-                _searchWorker.RunWorkerAsync(_codeList);
+                _searchWorker.RunWorkerAsync(_codeList.ToList());
             }
         }
 
